@@ -1,0 +1,16 @@
+streamlit
+pymongo
+openai
+PyPDF2
+pdfkit
+tempfile2
+langchain-community
+langchain-text-splitters
+langchain-google-genai
+chromadb
+langgraph
+langchain_openai
+
+## New adds
+pypdf
+nest_asyncio
