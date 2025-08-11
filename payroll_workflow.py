@@ -1,7 +1,7 @@
 import os
 import logging
 import time
-from typing import Dict, Any, Optional, TypedDict, Annotated
+from typing import Dict, Any, Optional, TypedDict, Annotated, List
 from datetime import datetime
 
 # LangGraph imports
