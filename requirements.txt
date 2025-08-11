@@ -10,7 +10,28 @@ langchain-google-genai
 chromadb
 langgraph
 langchain_openai
-
-## New adds
 pypdf
 nest_asyncio
+
+# Additional dependencies for AgenticAI Payroll System
+langchain-core
+langchain
+pydantic
+python-dotenv
+pandas
+numpy
+jinja2
+reportlab
+matplotlib
+seaborn
+plotly
+streamlit-aggrid
+python-multipart
+typing-extensions
+asyncio
+datetime
+logging
+json5
+requests
+beautifulsoup4
+lxml
