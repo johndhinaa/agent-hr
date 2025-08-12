@@ -142,6 +142,11 @@ class AgentResult(BaseModel):
     error_message: Optional[str] = None
     execution_time: float
     confidence_score: Optional[float] = None
+    # Verbose logging fields for agent communication
+    prompt_messages: List[Dict[str, Any]] = []
+    raw_prompt: Optional[str] = None
+    raw_response: Optional[str] = None
+    usage: Optional[Dict[str, Any]] = None
 
 class WorkflowState(BaseModel):
     contract_path: str

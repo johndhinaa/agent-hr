@@ -39,12 +39,13 @@ logger = logging.getLogger(__name__)
 class ContractReaderAgent:
     """Real AI Agent 1: Parse employee contracts using Gemini LLM"""
     
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, verbose: bool = False):
         self.llm = ChatGoogleGenerativeAI(
             model="gemini-1.5-pro",
             temperature=0.1,
             google_api_key=api_key
         )
+        self.verbose = verbose
         
         self.system_prompt = """You are an expert HR contract parser. Your task is to extract structured information from employment contracts.
 
@@ -66,14 +67,27 @@ Be precise and extract exact values. If a value is not mentioned, use null."""
     def execute(self, contract_path: str) -> AgentResult:
         """Execute the contract reading agent"""
         start_time = time.time()
+        raw_prompt = None
+        raw_response = None
+        messages_payload: List[Dict[str, Any]] = []
+        usage = None
         
         try:
             # Extract text from PDF
             extracted_text = self._extract_pdf_text(contract_path)
             
-            # Parse with LLM
+            # Build messages
             messages = self.prompt.format_messages(contract_text=extracted_text)
+            # For verbose logs, serialize messages to simple dicts
+            for m in messages:
+                role = getattr(m, 'type', 'unknown')
+                content = getattr(m, 'content', '')
+                messages_payload.append({"role": role, "content": content})
+            raw_prompt = json.dumps(messages_payload, ensure_ascii=False, indent=2)
+            
+            # Call LLM
             response = self.llm.invoke(messages)
+            raw_response = getattr(response, 'content', str(response))
             
             # Parse JSON response
             parsed_data = json.loads(response.content)
@@ -88,7 +102,11 @@ Be precise and extract exact values. If a value is not mentioned, use null."""
                 success=True,
                 output=contract_data,
                 execution_time=execution_time,
-                confidence_score=0.95
+                confidence_score=0.95,
+                prompt_messages=messages_payload if self.verbose else [],
+                raw_prompt=raw_prompt if self.verbose else None,
+                raw_response=raw_response if self.verbose else None,
+                usage=usage
             )
             
         except Exception as e:
@@ -100,7 +118,11 @@ Be precise and extract exact values. If a value is not mentioned, use null."""
                 success=False,
                 output=None,
                 error_message=str(e),
-                execution_time=execution_time
+                execution_time=execution_time,
+                prompt_messages=messages_payload if self.verbose else [],
+                raw_prompt=raw_prompt if self.verbose else None,
+                raw_response=raw_response if self.verbose else None,
+                usage=usage
             )
     
     def _extract_pdf_text(self, contract_path: str) -> str:
@@ -113,8 +135,7 @@ Be precise and extract exact values. If a value is not mentioned, use null."""
                     text += page.extract_text() + "\n"
                 return text
         except Exception as e:
-            logger.error(f"PDF text extraction failed: {e}")
-            # For text files, read directly
+            logger.warning(f"PDF text extraction failed ({e}), trying as text file")
             with open(contract_path, 'r', encoding='utf-8') as file:
                 return file.read()
     
@@ -160,12 +181,13 @@ Be precise and extract exact values. If a value is not mentioned, use null."""
 class SalaryBreakdownAgent:
     """Real AI Agent 2: Calculate salary breakdown using Gemini LLM"""
     
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, verbose: bool = False):
         self.llm = ChatGoogleGenerativeAI(
             model="gemini-1.5-pro",
             temperature=0.1,
             google_api_key=api_key
         )
+        self.verbose = verbose
         
         self.system_prompt = """You are an expert payroll calculator specializing in Indian salary structures. 
 
@@ -194,14 +216,24 @@ Return the calculation in JSON format with detailed breakdown."""
     def execute(self, contract_data: ContractData) -> AgentResult:
         """Execute the salary breakdown agent"""
         start_time = time.time()
+        raw_prompt = None
+        raw_response = None
+        messages_payload: List[Dict[str, Any]] = []
+        usage = None
         
         try:
             # Prepare contract data for LLM
             contract_json = contract_data.model_dump()
             
-            # Calculate with LLM
+            # Build messages
             messages = self.prompt.format_messages(contract_data=json.dumps(contract_json, indent=2))
+            for m in messages:
+                messages_payload.append({"role": getattr(m, 'type', 'unknown'), "content": getattr(m, 'content', '')})
+            raw_prompt = json.dumps(messages_payload, ensure_ascii=False, indent=2)
+            
+            # Calculate with LLM
             response = self.llm.invoke(messages)
+            raw_response = getattr(response, 'content', str(response))
             
             # Parse response
             salary_data = json.loads(response.content)
@@ -216,7 +248,11 @@ Return the calculation in JSON format with detailed breakdown."""
                 success=True,
                 output=salary_breakdown,
                 execution_time=execution_time,
-                confidence_score=0.98
+                confidence_score=0.98,
+                prompt_messages=messages_payload if self.verbose else [],
+                raw_prompt=raw_prompt if self.verbose else None,
+                raw_response=raw_response if self.verbose else None,
+                usage=usage
             )
             
         except Exception as e:
@@ -228,7 +264,11 @@ Return the calculation in JSON format with detailed breakdown."""
                 success=False,
                 output=None,
                 error_message=str(e),
-                execution_time=execution_time
+                execution_time=execution_time,
+                prompt_messages=messages_payload if self.verbose else [],
+                raw_prompt=raw_prompt if self.verbose else None,
+                raw_response=raw_response if self.verbose else None,
+                usage=usage
             )
     
     def _create_salary_breakdown(self, salary_data: Dict) -> SalaryBreakdown:
@@ -259,13 +299,14 @@ Return the calculation in JSON format with detailed breakdown."""
 class ComplianceMapperAgent:
     """Real AI Agent 3: Validate compliance using RAG and Gemini LLM"""
     
-    def __init__(self, api_key: str, rag_system: PayrollRAGSystem):
+    def __init__(self, api_key: str, rag_system: PayrollRAGSystem, verbose: bool = False):
         self.llm = ChatGoogleGenerativeAI(
             model="gemini-1.5-pro",
             temperature=0.1,
             google_api_key=api_key
         )
         self.rag_system = rag_system
+        self.verbose = verbose
         
         self.system_prompt = """You are an expert compliance validator for Indian payroll systems.
 
@@ -288,6 +329,10 @@ Use the provided compliance rules and return validation results in JSON format."
     def execute(self, salary_data: SalaryBreakdown) -> AgentResult:
         """Execute the compliance mapper agent"""
         start_time = time.time()
+        raw_prompt = None
+        raw_response = None
+        messages_payload: List[Dict[str, Any]] = []
+        usage = None
         
         try:
             # Get compliance rules from RAG
@@ -305,7 +350,12 @@ Use the provided compliance rules and return validation results in JSON format."
                 salary_data=json.dumps(salary_json, indent=2),
                 compliance_rules=json.dumps(compliance_rules, indent=2)
             )
+            for m in messages:
+                messages_payload.append({"role": getattr(m, 'type', 'unknown'), "content": getattr(m, 'content', '')})
+            raw_prompt = json.dumps(messages_payload, ensure_ascii=False, indent=2)
+            
             response = self.llm.invoke(messages)
+            raw_response = getattr(response, 'content', str(response))
             
             # Parse response
             compliance_data = json.loads(response.content)
@@ -320,7 +370,11 @@ Use the provided compliance rules and return validation results in JSON format."
                 success=True,
                 output=compliance_validation,
                 execution_time=execution_time,
-                confidence_score=0.92
+                confidence_score=0.92,
+                prompt_messages=messages_payload if self.verbose else [],
+                raw_prompt=raw_prompt if self.verbose else None,
+                raw_response=raw_response if self.verbose else None,
+                usage=usage
             )
             
         except Exception as e:
@@ -332,7 +386,11 @@ Use the provided compliance rules and return validation results in JSON format."
                 success=False,
                 output=None,
                 error_message=str(e),
-                execution_time=execution_time
+                execution_time=execution_time,
+                prompt_messages=messages_payload if self.verbose else [],
+                raw_prompt=raw_prompt if self.verbose else None,
+                raw_response=raw_response if self.verbose else None,
+                usage=usage
             )
     
     def _create_compliance_validation(self, compliance_data: Dict) -> ComplianceValidation:
@@ -350,12 +408,13 @@ Use the provided compliance rules and return validation results in JSON format."
 class AnomalyDetectorAgent:
     """Real AI Agent 4: Detect anomalies using Gemini LLM"""
     
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, verbose: bool = False):
         self.llm = ChatGoogleGenerativeAI(
             model="gemini-1.5-pro",
             temperature=0.1,
             google_api_key=api_key
         )
+        self.verbose = verbose
         
         self.system_prompt = """You are an expert anomaly detector for payroll systems.
 
@@ -378,6 +437,10 @@ Return anomaly detection results in JSON format with severity levels."""
     def execute(self, payroll_data: Dict) -> AgentResult:
         """Execute the anomaly detector agent"""
         start_time = time.time()
+        raw_prompt = None
+        raw_response = None
+        messages_payload: List[Dict[str, Any]] = []
+        usage = None
         
         try:
             # Prepare data for LLM
@@ -385,7 +448,12 @@ Return anomaly detection results in JSON format with severity levels."""
             
             # Detect anomalies with LLM
             messages = self.prompt.format_messages(payroll_data=payroll_json)
+            for m in messages:
+                messages_payload.append({"role": getattr(m, 'type', 'unknown'), "content": getattr(m, 'content', '')})
+            raw_prompt = json.dumps(messages_payload, ensure_ascii=False, indent=2)
+            
             response = self.llm.invoke(messages)
+            raw_response = getattr(response, 'content', str(response))
             
             # Parse response
             anomaly_data = json.loads(response.content)
@@ -400,7 +468,11 @@ Return anomaly detection results in JSON format with severity levels."""
                 success=True,
                 output=anomaly_detection,
                 execution_time=execution_time,
-                confidence_score=0.94
+                confidence_score=0.94,
+                prompt_messages=messages_payload if self.verbose else [],
+                raw_prompt=raw_prompt if self.verbose else None,
+                raw_response=raw_response if self.verbose else None,
+                usage=usage
             )
             
         except Exception as e:
@@ -412,7 +484,11 @@ Return anomaly detection results in JSON format with severity levels."""
                 success=False,
                 output=None,
                 error_message=str(e),
-                execution_time=execution_time
+                execution_time=execution_time,
+                prompt_messages=messages_payload if self.verbose else [],
+                raw_prompt=raw_prompt if self.verbose else None,
+                raw_response=raw_response if self.verbose else None,
+                usage=usage
             )
     
     def _create_anomaly_detection(self, anomaly_data: Dict) -> AnomalyDetection:
@@ -440,12 +516,13 @@ Return anomaly detection results in JSON format with severity levels."""
 class PaystubGeneratorAgent:
     """Real AI Agent 5: Generate paystubs using Gemini LLM"""
     
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, verbose: bool = False):
         self.llm = ChatGoogleGenerativeAI(
             model="gemini-1.5-pro",
             temperature=0.1,
             google_api_key=api_key
         )
+        self.verbose = verbose
         
         self.system_prompt = """You are an expert paystub generator for Indian payroll systems.
 
@@ -468,6 +545,10 @@ Return the paystub data in JSON format suitable for PDF generation."""
     def execute(self, employee_data: Dict) -> AgentResult:
         """Execute the paystub generator agent"""
         start_time = time.time()
+        raw_prompt = None
+        raw_response = None
+        messages_payload: List[Dict[str, Any]] = []
+        usage = None
         
         try:
             # Prepare data for LLM
@@ -475,7 +556,12 @@ Return the paystub data in JSON format suitable for PDF generation."""
             
             # Generate paystub with LLM
             messages = self.prompt.format_messages(employee_data=employee_json)
+            for m in messages:
+                messages_payload.append({"role": getattr(m, 'type', 'unknown'), "content": getattr(m, 'content', '')})
+            raw_prompt = json.dumps(messages_payload, ensure_ascii=False, indent=2)
+            
             response = self.llm.invoke(messages)
+            raw_response = getattr(response, 'content', str(response))
             
             # Parse response
             paystub_data = json.loads(response.content)
@@ -490,7 +576,11 @@ Return the paystub data in JSON format suitable for PDF generation."""
                 success=True,
                 output=paystub,
                 execution_time=execution_time,
-                confidence_score=0.96
+                confidence_score=0.96,
+                prompt_messages=messages_payload if self.verbose else [],
+                raw_prompt=raw_prompt if self.verbose else None,
+                raw_response=raw_response if self.verbose else None,
+                usage=usage
             )
             
         except Exception as e:
@@ -502,7 +592,11 @@ Return the paystub data in JSON format suitable for PDF generation."""
                 success=False,
                 output=None,
                 error_message=str(e),
-                execution_time=execution_time
+                execution_time=execution_time,
+                prompt_messages=messages_payload if self.verbose else [],
+                raw_prompt=raw_prompt if self.verbose else None,
+                raw_response=raw_response if self.verbose else None,
+                usage=usage
             )
     
     def _create_paystub_data(self, paystub_data: Dict) -> PaystubData:

@@ -39,9 +39,10 @@ class PayrollWorkflowState(TypedDict):
 class RealPayrollAgenticWorkflow:
     """Real LangGraph-powered workflow for autonomous payroll processing with AI agents"""
     
-    def __init__(self, api_key: str, persist_directory: str = "./chroma_db"):
+    def __init__(self, api_key: str, persist_directory: str = "./chroma_db", verbose: bool = False):
         self.api_key = api_key
         self.rag_system = PayrollRAGSystem(persist_directory)
+        self.verbose = verbose
         
         # Initialize real AI agents
         self.agents = self._initialize_agents()
@@ -60,12 +61,27 @@ class RealPayrollAgenticWorkflow:
     def _initialize_agents(self) -> Dict[str, Any]:
         """Initialize all real AI payroll agents"""
         return {
-            "contract_reader": ContractReaderAgent(self.api_key),
-            "salary_breakdown": SalaryBreakdownAgent(self.api_key),
-            "compliance_mapper": ComplianceMapperAgent(self.api_key, self.rag_system),
-            "anomaly_detector": AnomalyDetectorAgent(self.api_key),
-            "paystub_generator": PaystubGeneratorAgent(self.api_key)
+            "contract_reader": ContractReaderAgent(self.api_key, verbose=self.verbose),
+            "salary_breakdown": SalaryBreakdownAgent(self.api_key, verbose=self.verbose),
+            "compliance_mapper": ComplianceMapperAgent(self.api_key, self.rag_system, verbose=self.verbose),
+            "anomaly_detector": AnomalyDetectorAgent(self.api_key, verbose=self.verbose),
+            "paystub_generator": PaystubGeneratorAgent(self.api_key, verbose=self.verbose)
         }
+    
+    def _debug_stream(self, name: str, result: AgentResult):
+        if not self.verbose:
+            return
+        print(f"\n===== {name} | VERBOSE =====")
+        if result.raw_prompt:
+            print("-- Prompt messages --")
+            print(result.raw_prompt)
+        if result.raw_response:
+            print("-- Model response --")
+            print(result.raw_response)
+        print(f"-- Success: {result.success}, Time: {result.execution_time:.2f}s, Confidence: {result.confidence_score}")
+        if result.error_message:
+            print(f"-- Error: {result.error_message}")
+        print(f"===== END {name} =====\n")
     
     def _create_workflow_graph(self) -> StateGraph:
         """Create the LangGraph workflow with real AI agents"""
@@ -97,210 +113,112 @@ class RealPayrollAgenticWorkflow:
         logger.info("Starting Contract Reader AI Agent")
         
         try:
-            # Execute real AI contract reader agent
             agent_result = self.agents["contract_reader"].execute(state["contract_path"])
-            
-            # Update state
+            self._debug_stream("ContractReaderAgent", agent_result)
             state["agent_results"]["contract_reader"] = agent_result
             state["current_step"] = "contract_reader"
             
             if not agent_result.success:
                 state["errors"].append(f"Contract Reader AI Agent failed: {agent_result.error_message}")
-                logger.error(f"Contract Reader AI Agent failed: {agent_result.error_message}")
             else:
-                # Extract employee ID if available
                 contract_data = agent_result.output
                 if contract_data and contract_data.employee_info.employee_id:
                     state["employee_id"] = contract_data.employee_info.employee_id
-                
-                logger.info("Contract Reader AI Agent completed successfully")
             
         except Exception as e:
-            error_msg = f"Contract Reader AI Agent node failed: {str(e)}"
-            state["errors"].append(error_msg)
-            logger.error(error_msg)
+            state["errors"].append(f"Contract Reader AI Agent node failed: {str(e)}")
         
         return state
     
     def _salary_breakdown_node(self, state: PayrollWorkflowState) -> PayrollWorkflowState:
-        """Node for salary breakdown AI agent"""
         logger.info("Starting Salary Breakdown AI Agent")
         
         try:
-            # Check if previous step succeeded
             contract_result = state["agent_results"].get("contract_reader")
             if not contract_result or not contract_result.success:
-                error_msg = "Cannot proceed with salary breakdown - contract reading failed"
-                state["errors"].append(error_msg)
-                logger.error(error_msg)
+                state["errors"].append("Cannot proceed with salary breakdown - contract reading failed")
                 return state
-            
-            # Execute real AI salary breakdown agent
             contract_data = contract_result.output
             agent_result = self.agents["salary_breakdown"].execute(contract_data)
-            
-            # Update state
+            self._debug_stream("SalaryBreakdownAgent", agent_result)
             state["agent_results"]["salary_breakdown"] = agent_result
             state["current_step"] = "salary_breakdown"
-            
-            if not agent_result.success:
-                state["errors"].append(f"Salary Breakdown AI Agent failed: {agent_result.error_message}")
-                logger.error(f"Salary Breakdown AI Agent failed: {agent_result.error_message}")
-            else:
-                logger.info("Salary Breakdown AI Agent completed successfully")
-            
         except Exception as e:
-            error_msg = f"Salary Breakdown AI Agent node failed: {str(e)}"
-            state["errors"].append(error_msg)
-            logger.error(error_msg)
-        
+            state["errors"].append(f"Salary Breakdown AI Agent node failed: {str(e)}")
         return state
     
     def _compliance_mapper_node(self, state: PayrollWorkflowState) -> PayrollWorkflowState:
-        """Node for compliance mapper AI agent"""
         logger.info("Starting Compliance Mapper AI Agent")
-        
         try:
-            # Check if previous step succeeded
             salary_result = state["agent_results"].get("salary_breakdown")
             if not salary_result or not salary_result.success:
-                error_msg = "Cannot proceed with compliance mapping - salary breakdown failed"
-                state["errors"].append(error_msg)
-                logger.error(error_msg)
+                state["errors"].append("Cannot proceed with compliance mapping - salary breakdown failed")
                 return state
-            
-            # Execute real AI compliance mapper agent
             salary_data = salary_result.output
             agent_result = self.agents["compliance_mapper"].execute(salary_data)
-            
-            # Update state
+            self._debug_stream("ComplianceMapperAgent", agent_result)
             state["agent_results"]["compliance_mapper"] = agent_result
             state["current_step"] = "compliance_mapper"
-            
-            if not agent_result.success:
-                state["errors"].append(f"Compliance Mapper AI Agent failed: {agent_result.error_message}")
-                logger.error(f"Compliance Mapper AI Agent failed: {agent_result.error_message}")
-            else:
-                logger.info("Compliance Mapper AI Agent completed successfully")
-            
         except Exception as e:
-            error_msg = f"Compliance Mapper AI Agent node failed: {str(e)}"
-            state["errors"].append(error_msg)
-            logger.error(error_msg)
-        
+            state["errors"].append(f"Compliance Mapper AI Agent node failed: {str(e)}")
         return state
     
     def _anomaly_detector_node(self, state: PayrollWorkflowState) -> PayrollWorkflowState:
-        """Node for anomaly detector AI agent"""
         logger.info("Starting Anomaly Detector AI Agent")
-        
         try:
-            # Gather data from previous agents
             contract_result = state["agent_results"].get("contract_reader")
             salary_result = state["agent_results"].get("salary_breakdown")
             compliance_result = state["agent_results"].get("compliance_mapper")
-            
-            # Prepare data for anomaly detection
             anomaly_input = {
                 "contract_data": contract_result.output.model_dump() if contract_result and contract_result.success else None,
                 "salary_data": salary_result.output.model_dump() if salary_result and salary_result.success else None,
                 "compliance_data": compliance_result.output.model_dump() if compliance_result and compliance_result.success else None
             }
-            
-            # Execute real AI anomaly detector agent
             agent_result = self.agents["anomaly_detector"].execute(anomaly_input)
-            
-            # Update state
+            self._debug_stream("AnomalyDetectorAgent", agent_result)
             state["agent_results"]["anomaly_detector"] = agent_result
             state["current_step"] = "anomaly_detector"
-            
-            if not agent_result.success:
-                state["errors"].append(f"Anomaly Detector AI Agent failed: {agent_result.error_message}")
-                logger.error(f"Anomaly Detector AI Agent failed: {agent_result.error_message}")
-            else:
-                logger.info("Anomaly Detector AI Agent completed successfully")
-            
         except Exception as e:
-            error_msg = f"Anomaly Detector AI Agent node failed: {str(e)}"
-            state["errors"].append(error_msg)
-            logger.error(error_msg)
-        
+            state["errors"].append(f"Anomaly Detector AI Agent node failed: {str(e)}")
         return state
     
     def _paystub_generator_node(self, state: PayrollWorkflowState) -> PayrollWorkflowState:
-        """Node for paystub generator AI agent"""
         logger.info("Starting Paystub Generator AI Agent")
-        
         try:
-            # Gather data from previous agents
             contract_result = state["agent_results"].get("contract_reader")
             salary_result = state["agent_results"].get("salary_breakdown")
             compliance_result = state["agent_results"].get("compliance_mapper")
             anomaly_result = state["agent_results"].get("anomaly_detector")
-            
-            # Check if we have minimum required data
-            if not (contract_result and contract_result.success and 
-                   salary_result and salary_result.success):
-                error_msg = "Cannot generate paystub - missing required data"
-                state["errors"].append(error_msg)
-                logger.error(error_msg)
+            if not (contract_result and contract_result.success and salary_result and salary_result.success):
+                state["errors"].append("Cannot generate paystub - missing required data")
                 return state
-            
-            # Prepare data for paystub generation
             paystub_input = {
                 "contract_data": contract_result.output.model_dump(),
                 "salary_data": salary_result.output.model_dump(),
                 "compliance_data": compliance_result.output.model_dump() if compliance_result and compliance_result.success else None,
                 "anomaly_data": anomaly_result.output.model_dump() if anomaly_result and anomaly_result.success else None
             }
-            
-            # Execute real AI paystub generator agent
             agent_result = self.agents["paystub_generator"].execute(paystub_input)
-            
-            # Update state
+            self._debug_stream("PaystubGeneratorAgent", agent_result)
             state["agent_results"]["paystub_generator"] = agent_result
             state["current_step"] = "paystub_generator"
-            
-            if not agent_result.success:
-                state["errors"].append(f"Paystub Generator AI Agent failed: {agent_result.error_message}")
-                logger.error(f"Paystub Generator AI Agent failed: {agent_result.error_message}")
-            else:
-                logger.info("Paystub Generator AI Agent completed successfully")
-            
         except Exception as e:
-            error_msg = f"Paystub Generator AI Agent node failed: {str(e)}"
-            state["errors"].append(error_msg)
-            logger.error(error_msg)
-        
+            state["errors"].append(f"Paystub Generator AI Agent node failed: {str(e)}")
         return state
     
     def _finalize_result_node(self, state: PayrollWorkflowState) -> PayrollWorkflowState:
-        """Node to finalize the processing result"""
         logger.info("Finalizing processing result")
-        
         try:
-            # Set completion time
             state["completed_at"] = datetime.now()
             state["current_step"] = "completed"
-            
-            # Gather results from all AI agents
             contract_result = state["agent_results"].get("contract_reader")
             salary_result = state["agent_results"].get("salary_breakdown")
             compliance_result = state["agent_results"].get("compliance_mapper")
             anomaly_result = state["agent_results"].get("anomaly_detector")
             paystub_result = state["agent_results"].get("paystub_generator")
-            
-            # Determine overall success
             critical_agents = ["contract_reader", "salary_breakdown"]
-            success = all(
-                state["agent_results"].get(agent) and 
-                state["agent_results"][agent].success 
-                for agent in critical_agents
-            )
-            
-            # Create final processing result
+            success = all(state["agent_results"].get(a) and state["agent_results"][a].success for a in critical_agents)
             processing_time = (state["completed_at"] - state["started_at"]).total_seconds()
-            
             final_result = ProcessingResult(
                 success=success,
                 employee_id=state.get("employee_id", "unknown"),
@@ -317,21 +235,16 @@ class RealPayrollAgenticWorkflow:
                         "success": result.success,
                         "execution_time": result.execution_time,
                         "confidence_score": result.confidence_score,
-                        "error": result.error_message
+                        "error": result.error_message,
+                        "raw_prompt": result.raw_prompt if self.verbose else None,
+                        "raw_response": result.raw_response if self.verbose else None,
                     }
                     for name, result in state["agent_results"].items()
                 ]
             )
-            
             state["final_result"] = final_result
-            
-            logger.info(f"Processing completed successfully: {success}, Total time: {processing_time:.2f}s")
-            
         except Exception as e:
-            error_msg = f"Failed to finalize result: {str(e)}"
-            state["errors"].append(error_msg)
-            logger.error(error_msg)
-        
+            state["errors"].append(f"Failed to finalize result: {str(e)}")
         return state
     
     async def process_contract(self, contract_path: str, config: Optional[Dict[str, Any]] = None) -> ProcessingResult:
@@ -486,9 +399,9 @@ class RealPayrollAgenticWorkflow:
             return {}
 
 # Utility functions for workflow management
-def create_real_payroll_workflow(api_key: str, persist_directory: str = "./chroma_db") -> RealPayrollAgenticWorkflow:
+def create_real_payroll_workflow(api_key: str, persist_directory: str = "./chroma_db", verbose: bool = False) -> RealPayrollAgenticWorkflow:
     """Factory function to create a real AI agent payroll workflow"""
-    return RealPayrollAgenticWorkflow(api_key, persist_directory)
+    return RealPayrollAgenticWorkflow(api_key, persist_directory, verbose)
 
 def process_single_contract_with_ai(contract_path: str, api_key: str, config: Optional[Dict[str, Any]] = None) -> ProcessingResult:
     """Process a single contract through the complete AI agent workflow"""
