@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import tempfile
 import json
+import asyncio
 from datetime import datetime, timedelta
 from typing import Dict, Any, List
 import logging
@@ -68,6 +69,8 @@ if 'processing_results' not in st.session_state:
     st.session_state.processing_results = []
 if 'current_result' not in st.session_state:
     st.session_state.current_result = None
+if 'api_key' not in st.session_state:
+    st.session_state.api_key = None
 
 def initialize_workflow():
     """Initialize the payroll workflow"""
@@ -79,11 +82,18 @@ def initialize_workflow():
         
         if st.session_state.workflow is None:
             with st.spinner("Initializing AgenticAI Payroll System..."):
-                st.session_state.workflow = create_payroll_workflow(api_key)
+                try:
+                    st.session_state.workflow = create_payroll_workflow(api_key)
+                    st.success("✅ Payroll system initialized successfully!")
+                except Exception as e:
+                    st.error(f"Failed to initialize workflow: {e}")
+                    logger.error(f"Workflow initialization error: {e}")
+                    return None
         
         return st.session_state.workflow
     except Exception as e:
         st.error(f"Failed to initialize workflow: {e}")
+        logger.error(f"Workflow initialization error: {e}")
         return None
 
 def sidebar_config():
@@ -98,49 +108,31 @@ def sidebar_config():
         help="Enter your Google Gemini API key"
     )
     
-    if api_key:
+    # Update session state when API key changes
+    if api_key != st.session_state.get('api_key'):
         st.session_state.api_key = api_key
-        os.environ["GOOGLE_API_KEY"] = api_key
-    
-    st.sidebar.divider()
+        st.session_state.workflow = None  # Reset workflow when API key changes
     
     # System status
     st.sidebar.subheader("📊 System Status")
     
     if st.session_state.workflow:
-        st.sidebar.success("✅ System Ready")
-        st.sidebar.info(f"📁 RAG Database: Available")
-        st.sidebar.info(f"🤖 Agents: 5 Active")
+        st.sidebar.success("✅ System Initialized")
     else:
         st.sidebar.warning("⚠️ System Not Initialized")
     
-    st.sidebar.divider()
+    # Processing options
+    st.sidebar.subheader("⚙️ Default Options")
     
-    # Quick Actions
-    st.sidebar.subheader("🚀 Quick Actions")
+    st.sidebar.checkbox("Auto-validate compliance", value=True, key="default_auto_validate")
+    st.sidebar.checkbox("Generate paystub", value=True, key="default_generate_paystub")
+    st.sidebar.checkbox("Detect anomalies", value=True, key="default_detect_anomalies")
     
-    if st.sidebar.button("🔄 Reset System"):
-        st.session_state.workflow = None
+    # Clear results button
+    if st.sidebar.button("🗑️ Clear All Results"):
         st.session_state.processing_results = []
         st.session_state.current_result = None
         st.rerun()
-    
-    if st.sidebar.button("📊 View Analytics"):
-        st.session_state.page = "analytics"
-        st.rerun()
-    
-    # Recent Processing History
-    st.sidebar.subheader("📋 Recent Processes")
-    
-    if st.session_state.processing_results:
-        for i, result in enumerate(st.session_state.processing_results[-5:]):
-            status_icon = "✅" if result.success else "❌"
-            employee_id = result.employee_id if result.employee_id != "unknown" else f"Process {i+1}"
-            
-            if st.sidebar.button(f"{status_icon} {employee_id}", key=f"recent_{i}"):
-                st.session_state.current_result = result
-                st.session_state.page = "result_detail"
-                st.rerun()
 
 def main_dashboard():
     """Main dashboard page"""
@@ -228,6 +220,7 @@ def contract_processing_page():
     
     workflow = initialize_workflow()
     if not workflow:
+        st.warning("Please enter your Google API key in the sidebar to initialize the system.")
         return
     
     # File upload
@@ -244,9 +237,21 @@ def contract_processing_page():
     with col1:
         st.subheader("⚙️ Processing Options")
         
-        auto_validate = st.checkbox("Auto-validate compliance", value=True, help="Automatically validate against compliance rules")
-        generate_paystub = st.checkbox("Generate paystub", value=True, help="Generate downloadable paystub PDF")
-        detect_anomalies = st.checkbox("Detect anomalies", value=True, help="Run anomaly detection")
+        auto_validate = st.checkbox(
+            "Auto-validate compliance", 
+            value=st.session_state.get("default_auto_validate", True), 
+            help="Automatically validate against compliance rules"
+        )
+        generate_paystub = st.checkbox(
+            "Generate paystub", 
+            value=st.session_state.get("default_generate_paystub", True), 
+            help="Generate downloadable paystub PDF"
+        )
+        detect_anomalies = st.checkbox(
+            "Detect anomalies", 
+            value=st.session_state.get("default_detect_anomalies", True), 
+            help="Run anomaly detection"
+        )
     
     with col2:
         st.subheader("📊 Preview Settings")
@@ -257,14 +262,15 @@ def contract_processing_page():
     
     # Process button
     if uploaded_file and st.button("🚀 Process Contract", type="primary"):
-        process_contract(uploaded_file, workflow, {
-            "auto_validate": auto_validate,
-            "generate_paystub": generate_paystub,
-            "detect_anomalies": detect_anomalies,
-            "show_agent_logs": show_agent_logs,
-            "show_raw_data": show_raw_data,
-            "real_time_updates": real_time_updates
-        })
+        with st.spinner("Processing contract..."):
+            process_contract(uploaded_file, workflow, {
+                "auto_validate": auto_validate,
+                "generate_paystub": generate_paystub,
+                "detect_anomalies": detect_anomalies,
+                "show_agent_logs": show_agent_logs,
+                "show_raw_data": show_raw_data,
+                "real_time_updates": real_time_updates
+            })
 
 def process_contract(uploaded_file, workflow, options):
     """Process the uploaded contract"""
@@ -301,37 +307,48 @@ def process_contract(uploaded_file, workflow, options):
             status_text.info("🚀 Starting payroll processing...")
             progress_bar.progress(10)
             
-            # Process the contract
-            result = workflow.process_contract_sync(contract_path)
-            
-            # Update progress based on result
-            if result.success:
-                progress_bar.progress(100)
-                status_text.success("✅ Processing completed successfully!")
+            try:
+                # Process the contract using synchronous method
+                result = workflow.process_contract_sync(contract_path)
                 
-                # Update agent status
-                if options["real_time_updates"]:
-                    for agent_log in result.agent_logs:
-                        agent_name = agent_log["agent"].replace("Agent", "").replace("_", " ").title()
-                        if agent_name in agent_status:
-                            if agent_log["success"]:
-                                agent_status[agent_name].success(f"✅ {agent_name}")
-                            else:
-                                agent_status[agent_name].error(f"❌ {agent_name}")
-            else:
+                # Update progress based on result
+                if result and result.success:
+                    progress_bar.progress(100)
+                    status_text.success("✅ Processing completed successfully!")
+                    
+                    # Update agent status
+                    if options["real_time_updates"] and hasattr(result, 'agent_logs'):
+                        for agent_log in result.agent_logs:
+                            agent_name = agent_log.get("agent", "").replace("Agent", "").replace("_", " ").title()
+                            if agent_name in agent_status:
+                                if agent_log.get("success", False):
+                                    agent_status[agent_name].success(f"✅ {agent_name}")
+                                else:
+                                    agent_status[agent_name].error(f"❌ {agent_name}")
+                else:
+                    progress_bar.progress(50)
+                    status_text.error("❌ Processing failed!")
+                    if result and hasattr(result, 'errors'):
+                        for error in result.errors:
+                            st.error(f"Error: {error}")
+                
+                # Store result
+                if result:
+                    st.session_state.processing_results.append(result)
+                    st.session_state.current_result = result
+                    
+                    # Display results
+                    display_processing_result(result, options)
+                    
+            except Exception as e:
                 progress_bar.progress(50)
-                status_text.error("❌ Processing failed!")
-            
-            # Store result
-            st.session_state.processing_results.append(result)
-            st.session_state.current_result = result
-            
-            # Display results
-            display_processing_result(result, options)
+                status_text.error(f"❌ Processing failed: {e}")
+                logger.error(f"Contract processing error: {e}")
+                st.error(f"Processing failed: {e}")
     
     except Exception as e:
-        st.error(f"Processing failed: {e}")
-        logger.error(f"Contract processing error: {e}")
+        st.error(f"File processing failed: {e}")
+        logger.error(f"File processing error: {e}")
     
     finally:
         # Clean up temporary file
